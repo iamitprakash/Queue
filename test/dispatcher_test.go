@@ -41,36 +41,21 @@ func TestDispatcher_StartAndProcess(t *testing.T) {
 	d := dispatcher.NewDispatcher(1024, 4)
 
 	var processed atomic.Int64
-	var wg sync.WaitGroup
-
 	numJobs := 100
-	wg.Add(numJobs)
 
 	d.Start(func(job queue.Job) {
 		processed.Add(1)
-		wg.Done()
 	})
 
 	for i := 0; i < numJobs; i++ {
 		for !d.Submit(queue.Job{ID: int64(i)}) {
-			// Retry if queue is full
 			time.Sleep(time.Microsecond)
 		}
 	}
 
-	// Wait for all jobs with timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Success
-	case <-time.After(5 * time.Second):
-		t.Fatalf("timeout: processed %d/%d jobs", processed.Load(), numJobs)
-	}
+	// Use the new Wait() method
+	d.Wait()
+	d.Stop()
 
 	if processed.Load() != int64(numJobs) {
 		t.Errorf("expected %d processed, got %d", numJobs, processed.Load())
@@ -82,23 +67,25 @@ func TestDispatcher_JobData(t *testing.T) {
 
 	var receivedIDs []int64
 	var mu sync.Mutex
-	var wg sync.WaitGroup
+	var processed atomic.Int64
 
 	numJobs := 10
-	wg.Add(numJobs)
 
 	d.Start(func(job queue.Job) {
 		mu.Lock()
 		receivedIDs = append(receivedIDs, job.ID)
 		mu.Unlock()
-		wg.Done()
+		processed.Add(1)
 	})
 
 	for i := 0; i < numJobs; i++ {
-		d.Submit(queue.Job{ID: int64(i * 10)})
+		for !d.Submit(queue.Job{ID: int64(i * 10)}) {
+			time.Sleep(time.Microsecond)
+		}
 	}
 
-	wg.Wait()
+	d.Wait()
+	d.Stop()
 
 	// Verify all jobs were processed (order may vary)
 	if len(receivedIDs) != numJobs {
@@ -127,51 +114,74 @@ func TestDispatcher_HighVolume(t *testing.T) {
 	var processed atomic.Int64
 	numJobs := 10000
 
-	var wg sync.WaitGroup
-	wg.Add(numJobs)
-
 	d.Start(func(job queue.Job) {
 		processed.Add(1)
-		wg.Done()
 	})
 
-	submitted := 0
-	for submitted < numJobs {
-		if d.Submit(queue.Job{ID: int64(submitted)}) {
-			submitted++
-		} else {
+	for i := 0; i < numJobs; i++ {
+		for !d.Submit(queue.Job{ID: int64(i)}) {
 			time.Sleep(time.Microsecond)
 		}
 	}
 
-	// Wait with timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Success
-	case <-time.After(10 * time.Second):
-		t.Fatalf("timeout: processed %d/%d jobs", processed.Load(), numJobs)
-	}
+	d.Wait()
+	d.Stop()
 
 	if processed.Load() != int64(numJobs) {
 		t.Errorf("expected %d processed, got %d", numJobs, processed.Load())
 	}
 }
 
+func TestDispatcher_Wait(t *testing.T) {
+	d := dispatcher.NewDispatcher(1024, 4)
+
+	var processed atomic.Int64
+	numJobs := 50
+
+	d.Start(func(job queue.Job) {
+		time.Sleep(time.Millisecond) // Simulate work
+		processed.Add(1)
+	})
+
+	for i := 0; i < numJobs; i++ {
+		for !d.Submit(queue.Job{ID: int64(i)}) {
+			time.Sleep(time.Microsecond)
+		}
+	}
+
+	// Wait should block until all jobs are processed
+	d.Wait()
+
+	if processed.Load() != int64(numJobs) {
+		t.Errorf("Wait() returned before all jobs processed: %d/%d", processed.Load(), numJobs)
+	}
+
+	d.Stop()
+}
+
+func TestDispatcher_StopRejectsNewJobs(t *testing.T) {
+	d := dispatcher.NewDispatcher(1024, 4)
+
+	d.Start(func(job queue.Job) {})
+
+	// Submit a job before stop
+	if !d.Submit(queue.Job{ID: 1}) {
+		t.Error("Submit should succeed before stop")
+	}
+
+	d.Wait()
+	d.Stop()
+
+	// Submit after stop should fail
+	if d.Submit(queue.Job{ID: 2}) {
+		t.Error("Submit should fail after stop")
+	}
+}
+
 func BenchmarkDispatcher_SubmitProcess(b *testing.B) {
 	d := dispatcher.NewDispatcher(8192, 8)
 
-	var wg sync.WaitGroup
-	wg.Add(b.N)
-
-	d.Start(func(job queue.Job) {
-		wg.Done()
-	})
+	d.Start(func(job queue.Job) {})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -180,5 +190,6 @@ func BenchmarkDispatcher_SubmitProcess(b *testing.B) {
 		}
 	}
 
-	wg.Wait()
+	d.Wait()
+	d.Stop()
 }
