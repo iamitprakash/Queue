@@ -182,4 +182,3 @@ func BenchmarkDispatcher_SubmitProcess(b *testing.B) {
 
 	wg.Wait()
 }
-
