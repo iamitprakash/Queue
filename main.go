@@ -1,14 +1,21 @@
+package main
+
+import (
+	"github.com/amitprakash/queue/dispatcher"
+	"github.com/amitprakash/queue/queue"
+)
+
 func main() {
-    d := dispatcher.NewDispatcher(1024, 8)
+	d := dispatcher.NewDispatcher(1024, 8)
 
-    d.Start(func(job queue.Job) {
-        // process job
-        _ = job.ID
-    })
+	d.Start(func(job queue.Job) {
+		// process job
+		_ = job.ID
+	})
 
-    for i := 0; i < 1_000_000; i++ {
-        d.Submit(queue.Job{
-            ID: int64(i),
-        })
-    }
+	for i := 0; i < 1_000_000; i++ {
+		d.Submit(queue.Job{
+			ID: int64(i),
+		})
+	}
 }
